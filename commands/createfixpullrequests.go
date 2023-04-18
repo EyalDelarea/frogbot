@@ -279,13 +279,15 @@ func (cfp *CreateFixPullRequestsCmd) addVulnerabilityToFixVersionsMap(vulnerabil
 }
 
 // getFixVersion returns the suggested fix version.
-// Selects upgrade and downgrade options and pass it to next function to make a decision.
+// Selects upgrade and downgrade options and pass it to the next function to make a decision.
 // fixVersions array is sorted, smallest version in index 0.
 func getFixVersion(impactedPackageVersion string, fixVersions []string) (string, error) {
 	if len(fixVersions) == 0 {
 		return "", nil
 	}
 	currVersion := strings.TrimPrefix(impactedPackageVersion, "v")
+	// Remove brackets so we can compare
+	fixVersions = trimBrackets(fixVersions)
 	// Find original version place in the sorted array
 	idx := sort.SearchStrings(fixVersions, currVersion)
 	if idx == len(fixVersions) {
@@ -343,4 +345,13 @@ func parseVersionChangeString(fixVersion string) string {
 	latestVersion = strings.Trim(latestVersion, "[")
 	latestVersion = strings.Trim(latestVersion, "]")
 	return latestVersion
+}
+
+// Removes brackets from versions in order to compare them
+func trimBrackets(versions []string) []string {
+	result := make([]string, len(versions))
+	for index, ver := range versions {
+		result[index] = strings.Trim(strings.Trim(ver, "["), "]")
+	}
+	return result
 }
