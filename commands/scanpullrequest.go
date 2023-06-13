@@ -25,11 +25,30 @@ const (
 	noGitHubEnvReviewersErr  = "frogbot did not scan this PR, because the existing GitHub Environment named 'frogbot' doesn't have reviewers selected. Please refer to the Frogbot documentation for instructions on how to create the Environment"
 )
 
-type ScanPullRequestCmd struct{}
+// ScannedProjectInfo Save scanned projects info to avoid rescans when executing scan-pull-requests command.
+type ScannedProjectInfo struct {
+	scanResults    []services.ScanResponse
+	branchName     string
+	isMultipleRoot bool
+	projectIndex   int
+}
 
-// Run ScanPullRequest method only works for single repository scan.
+func (spi *ScannedProjectInfo) shouldScanProject(branchName string, projectIndex int) bool {
+	return spi.branchName != branchName || projectIndex != spi.projectIndex
+}
+
+func (spi *ScannedProjectInfo) setScannedProject(branchName string, projectIndex int) {
+	spi.projectIndex, spi.branchName = projectIndex, branchName
+}
+
+type ScanPullRequestCmd struct {
+	ScannedProjectInfo
+}
+
+// Run ScanPullRequestAndComment method only works for single repository scan.
 // Therefore, the first repository config represents the repository on which Frogbot runs, and it is the only one that matters.
 func (cmd *ScanPullRequestCmd) Run(configAggregator utils.FrogbotConfigAggregator, client vcsclient.VcsClient) error {
+	cmd.projectIndex = -1
 	if err := utils.ValidateSingleRepoConfiguration(&configAggregator); err != nil {
 		return err
 	}
@@ -39,21 +58,21 @@ func (cmd *ScanPullRequestCmd) Run(configAggregator utils.FrogbotConfigAggregato
 			return err
 		}
 	}
-	return scanPullRequest(repoConfig, client)
+	return cmd.scanPullRequest(repoConfig, client)
 }
 
 // By default, includeAllVulnerabilities is set to false and the scan goes as follows:
 // a. Audit the dependencies of the source and the target branches.
 // b. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
 // Otherwise, only the source branch is scanned and all found vulnerabilities are being displayed.
-func scanPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsClient) error {
+func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsClient) error {
 	// Validate scan params
 	if len(repoConfig.Branches) == 0 {
 		return &utils.ErrMissingEnv{VariableName: utils.GitBaseBranchEnv}
 	}
 
 	// Audit PR code
-	vulnerabilitiesRows, err := auditPullRequest(repoConfig, client)
+	vulnerabilitiesRows, err := cmd.auditPullRequest(repoConfig, client)
 	if err != nil {
 		return err
 	}
@@ -73,7 +92,7 @@ func scanPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsCl
 	return err
 }
 
-func auditPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsClient) ([]formats.VulnerabilityOrViolationRow, error) {
+func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsClient) ([]formats.VulnerabilityOrViolationRow, error) {
 	var vulnerabilitiesRows []formats.VulnerabilityOrViolationRow
 	for i := range repoConfig.Projects {
 		scanDetails := utils.NewScanDetails(client, &repoConfig.Server, &repoConfig.Git).
@@ -95,13 +114,16 @@ func auditPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsC
 			vulnerabilitiesRows = append(vulnerabilitiesRows, allIssuesRows...)
 			continue
 		}
-		// Audit target code
-		scanDetails.SetFailOnInstallationErrors(*repoConfig.FailOnSecurityIssues).SetBranch(repoConfig.Branches[0])
-		targetScan, isMultipleRoot, err := auditTarget(scanDetails)
-		if err != nil {
-			return nil, err
+		// Audit target code if not provided with scan results
+		targetBranchToScan := repoConfig.Branches[0]
+		scanDetails.SetFailOnInstallationErrors(*repoConfig.FailOnSecurityIssues).SetBranch(targetBranchToScan)
+		if cmd.shouldScanProject(targetBranchToScan, i) {
+			if cmd.scanResults, cmd.isMultipleRoot, err = auditTarget(scanDetails); err != nil {
+				return nil, err
+			}
+			cmd.setScannedProject(targetBranchToScan, i)
 		}
-		newIssuesRows, err := createNewIssuesRows(targetScan, sourceScan, isMultipleRoot)
+		newIssuesRows, err := createNewIssuesRows(cmd.scanResults, sourceScan, cmd.isMultipleRoot)
 		if err != nil {
 			return nil, err
 		}

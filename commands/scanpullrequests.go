@@ -14,11 +14,13 @@ import (
 var errPullRequestScan = "pull Request number %d in repository %s returned the following error: \n%s\n"
 
 type ScanAllPullRequestsCmd struct {
+	scanResults map[string]*ScannedProjectInfo
 }
 
 func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.FrogbotConfigAggregator, client vcsclient.VcsClient) error {
+	cmd.scanResults = make(map[string]*ScannedProjectInfo)
 	for _, config := range configAggregator {
-		err := scanAllPullRequests(config, client)
+		err := cmd.scanAllPullRequests(config, client)
 		if err != nil {
 			return err
 		}
@@ -32,29 +34,23 @@ func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.FrogbotConfigAggreg
 // b. Find the ones that should be scanned (new PRs or PRs with a 're-scan' comment)
 // c. Audit the dependencies of the source and the target branches.
 // d. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
-func scanAllPullRequests(repo utils.FrogbotRepoConfig, client vcsclient.VcsClient) (err error) {
+func (cmd ScanAllPullRequestsCmd) scanAllPullRequests(repo utils.FrogbotRepoConfig, client vcsclient.VcsClient) (err error) {
 	openPullRequests, err := client.ListOpenPullRequests(context.Background(), repo.RepoOwner, repo.RepoName)
 	if err != nil {
 		return err
 	}
-	var errList strings.Builder
 	for _, pr := range openPullRequests {
 		shouldScan, e := shouldScanPullRequest(repo, client, int(pr.ID))
 		if e != nil {
-			errList.WriteString(fmt.Sprintf(errPullRequestScan, int(pr.ID), repo.RepoName, e.Error()))
+			err = errors.Join(e)
 		}
 		if shouldScan {
-			e = downloadAndScanPullRequest(pr, repo, client)
-			// If error, write it in errList and continue to the next PR.
-			if e != nil {
-				errList.WriteString(fmt.Sprintf(errPullRequestScan, int(pr.ID), repo.RepoName, e.Error()))
+			if e = cmd.downloadAndScanPullRequest(pr, repo, client); e != nil {
+				err = errors.Join(fmt.Errorf(errPullRequestScan, int(pr.ID), repo.RepoName, e.Error()))
 			}
 		}
 	}
 
-	if errList.String() != "" {
-		err = errors.New(errList.String())
-	}
 	return
 }
 
@@ -86,7 +82,7 @@ func isFrogbotRescanComment(comment string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(comment)), utils.RescanRequestComment)
 }
 
-func downloadAndScanPullRequest(pr vcsclient.PullRequestInfo, repo utils.FrogbotRepoConfig, client vcsclient.VcsClient) error {
+func (cmd ScanAllPullRequestsCmd) downloadAndScanPullRequest(pr vcsclient.PullRequestInfo, repo utils.FrogbotRepoConfig, client vcsclient.VcsClient) error {
 	// Download the pull request source ("from") branch
 	params := utils.Params{Git: utils.Git{
 		GitProvider: repo.GitProvider,
@@ -148,5 +144,16 @@ func downloadAndScanPullRequest(pr vcsclient.PullRequestInfo, repo utils.Frogbot
 		Server:       repo.Server,
 		Params:       params,
 	}
-	return scanPullRequest(frogbotParams, client)
+
+	scanPullRequestCmd := &ScanPullRequestCmd{}
+	if results, exists := cmd.scanResults[pr.Target.Name]; exists {
+		scanPullRequestCmd.ScannedProjectInfo = *results
+		scanPullRequestCmd.branchName = pr.Target.Name
+	}
+
+	if err = scanPullRequestCmd.scanPullRequest(frogbotParams, client); err == nil {
+		// Save targets scan results to avoid rescans
+		cmd.scanResults[scanPullRequestCmd.branchName] = &scanPullRequestCmd.ScannedProjectInfo
+	}
+	return err
 }
