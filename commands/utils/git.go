@@ -7,6 +7,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing/protocol/packp/capability"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	"github.com/go-git/go-git/v5/plumbing/transport/client"
+	"github.com/jfrog/froggit-go/vcsclient"
 	"github.com/jfrog/froggit-go/vcsutils"
 	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
 	"net/http"
@@ -62,18 +63,18 @@ type CustomTemplates struct {
 	pullRequestTitleTemplate string
 }
 
-func NewGitManager(dryRun bool, clonedRepoPath, projectPath, remoteName, token, username string, g *Git) (*GitManager, error) {
+func NewGitManager(dryRun bool, clonedRepoPath, projectPath, remoteName string, gitDetails *Git) (*GitManager, error) {
 	setGoGitCustomClient()
 	repository, err := git.PlainOpen(projectPath)
 	if err != nil {
 		return nil, err
 	}
-	basicAuth := toBasicAuth(token, username)
-	templates, err := loadCustomTemplates(g.CommitMessageTemplate, g.BranchNameTemplate, g.PullRequestTitleTemplate)
+	basicAuth := toBasicAuth(gitDetails.Token, gitDetails.Username)
+	templates, err := loadCustomTemplates(gitDetails.CommitMessageTemplate, gitDetails.BranchNameTemplate, gitDetails.PullRequestTitleTemplate)
 	if err != nil {
 		return nil, err
 	}
-	return &GitManager{repository: repository, dryRunRepoPath: clonedRepoPath, remoteName: remoteName, auth: basicAuth, dryRun: dryRun, customTemplates: templates, git: g}, nil
+	return &GitManager{repository: repository, dryRunRepoPath: clonedRepoPath, remoteName: remoteName, auth: basicAuth, dryRun: dryRun, customTemplates: templates, git: gitDetails}, nil
 }
 
 func (gm *GitManager) Checkout(branchName string) error {
@@ -360,7 +361,7 @@ func (gm *GitManager) dryRunClone(destination string) error {
 func (gm *GitManager) generateHTTPSCloneUrl() (url string, err error) {
 	switch gm.git.GitProvider {
 	case vcsutils.GitHub:
-		return fmt.Sprintf(githubHttpsFormat, gm.git.ApiEndpoint, gm.git.RepoOwner, gm.git.RepoName), nil
+		return fmt.Sprintf(githubHttpsFormat, vcsclient.GitHubCloneUrl, gm.git.RepoOwner, gm.git.RepoName), nil
 	case vcsutils.GitLab:
 		return fmt.Sprintf(gitLabHttpsFormat, gm.git.ApiEndpoint, gm.git.GitProject, gm.git.RepoName), nil
 	case vcsutils.BitbucketServer:
@@ -371,6 +372,18 @@ func (gm *GitManager) generateHTTPSCloneUrl() (url string, err error) {
 	default:
 		return "", fmt.Errorf("unsupported version control provider: %s", gm.git.GitProvider.String())
 	}
+}
+
+func (gm *GitManager) CheckoutRemoteBranch(branchName string) error {
+	checkoutConfig := &git.CheckoutOptions{
+		Branch: plumbing.NewRemoteReferenceName(gm.remoteName, branchName),
+		Force:  true,
+	}
+	worktree, err := gm.repository.Worktree()
+	if err != nil {
+		return err
+	}
+	return worktree.Checkout(checkoutConfig)
 }
 
 func toBasicAuth(token, username string) *githttp.BasicAuth {

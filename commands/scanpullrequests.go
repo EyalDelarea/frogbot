@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
+	"github.com/jfrog/jfrog-client-go/utils/log"
+	"os"
 	"sort"
 	"strings"
 
@@ -15,42 +18,66 @@ var errPullRequestScan = "pull Request number %d in repository %s returned the f
 
 type ScanAllPullRequestsCmd struct {
 	scanResults map[string]*ScannedProjectInfo
+	scanPrCmd   *ScanPullRequestCmd
 }
 
 func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.FrogbotConfigAggregator, client vcsclient.VcsClient) error {
 	cmd.scanResults = make(map[string]*ScannedProjectInfo)
+	cmd.scanPrCmd = &ScanPullRequestCmd{}
 	for _, config := range configAggregator {
 		err := cmd.scanAllPullRequests(config, client)
 		if err != nil {
 			return err
 		}
 	}
-
 	return nil
 }
 
 // Scan pull requests as follows:
-// a. Retrieve all open pull requests
-// b. Find the ones that should be scanned (new PRs or PRs with a 're-scan' comment)
-// c. Audit the dependencies of the source and the target branches.
-// d. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
+// a. Clone the repository
+// b. Retrieve all open pull requests
+// c. Find the ones that should be scanned (new PRs or PRs with a 're-scan' comment)
+// d. Audit the dependencies of the source and the target branches.
+// e. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
 func (cmd ScanAllPullRequestsCmd) scanAllPullRequests(repo utils.FrogbotRepoConfig, client vcsclient.VcsClient) (err error) {
+	wd, err := fileutils.CreateTempDir()
+	if err != nil {
+		return
+	}
+	defer func() {
+		err = errors.Join(err, fileutils.RemoveTempDir(wd))
+	}()
+	log.Debug("Created temp working directory: ", wd)
+	cmd.scanPrCmd.gitManager, err = utils.NewGitManager(false, "", "", "origin", &repo.Git)
+	if err != nil {
+		return
+	}
+	if err = os.Chdir(wd); err != nil {
+		return
+	}
+	baseBranch := repo.Branches[0]
+	if err = cmd.scanPrCmd.gitManager.Clone(wd, baseBranch); err != nil {
+		return
+	}
 	openPullRequests, err := client.ListOpenPullRequests(context.Background(), repo.RepoOwner, repo.RepoName)
 	if err != nil {
 		return err
 	}
+
+	// Scan All Pull requests
 	for _, pr := range openPullRequests {
+		repo.PullRequestID = int(pr.ID)
 		shouldScan, e := shouldScanPullRequest(repo, client, int(pr.ID))
 		if e != nil {
 			err = errors.Join(e)
 		}
-		if shouldScan {
-			if e = cmd.downloadAndScanPullRequest(pr, repo, client); e != nil {
-				err = errors.Join(fmt.Errorf(errPullRequestScan, int(pr.ID), repo.RepoName, e.Error()))
-			}
+		if !shouldScan {
+			continue
+		}
+		if e = cmd.scanPrCmd.scanPullRequest(&repo, &pr, client); e != nil {
+			err = errors.Join(err, fmt.Errorf(errPullRequestScan, int(pr.ID), repo.RepoName, e.Error()))
 		}
 	}
-
 	return
 }
 
@@ -151,7 +178,7 @@ func (cmd ScanAllPullRequestsCmd) downloadAndScanPullRequest(pr vcsclient.PullRe
 		scanPullRequestCmd.branchName = pr.Target.Name
 	}
 
-	if err = scanPullRequestCmd.scanPullRequest(frogbotParams, client); err == nil {
+	if err = scanPullRequestCmd.scanPullRequest(frogbotParams, nil, client); err == nil {
 		// Save targets scan results to avoid rescans
 		cmd.scanResults[scanPullRequestCmd.branchName] = &scanPullRequestCmd.ScannedProjectInfo
 	}

@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 
 	"github.com/jfrog/frogbot/commands/utils"
 	"github.com/jfrog/froggit-go/vcsclient"
@@ -43,6 +44,8 @@ func (spi *ScannedProjectInfo) setScannedProject(branchName string, projectIndex
 
 type ScanPullRequestCmd struct {
 	ScannedProjectInfo
+	gitManager *utils.GitManager
+	wd         string
 }
 
 // Run ScanPullRequestAndComment method only works for single repository scan.
@@ -58,21 +61,30 @@ func (cmd *ScanPullRequestCmd) Run(configAggregator utils.FrogbotConfigAggregato
 			return err
 		}
 	}
-	return cmd.scanPullRequest(repoConfig, client)
+	pullRequestDetails, err := client.GetPullRequestInfoById(context.Background(), repoConfig.RepoOwner, repoConfig.RepoName, repoConfig.PullRequestID)
+	if err != nil {
+		return err
+	}
+	return cmd.scanPullRequest(repoConfig, &pullRequestDetails, client)
 }
 
 // By default, includeAllVulnerabilities is set to false and the scan goes as follows:
 // a. Audit the dependencies of the source and the target branches.
 // b. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
 // Otherwise, only the source branch is scanned and all found vulnerabilities are being displayed.
-func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsClient) error {
-	// Validate scan params
-	if len(repoConfig.Branches) == 0 {
-		return &utils.ErrMissingEnv{VariableName: utils.GitBaseBranchEnv}
-	}
+func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConfig, pullRequestDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) error {
 
+	wd, err := os.Getwd()
+	if err != nil {
+		return err
+	}
+	cmd.wd = wd
+
+	log.Info("---------------------------------------------------")
+	log.Info(fmt.Sprintf("Scanning pull request ID: %d", pullRequestDetails.ID))
+	log.Info("---------------------------------------------------")
 	// Audit PR code
-	vulnerabilitiesRows, err := cmd.auditPullRequest(repoConfig, client)
+	vulnerabilitiesRows, err := cmd.auditPullRequest(repoConfig, pullRequestDetails, client)
 	if err != nil {
 		return err
 	}
@@ -89,22 +101,32 @@ func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConf
 	if repoConfig.FailOnSecurityIssues != nil && *repoConfig.FailOnSecurityIssues && len(vulnerabilitiesRows) > 0 {
 		err = errors.New(securityIssueFoundErr)
 	}
+	log.Info(fmt.Sprintf("Finished scanning pull request ID: %d", pullRequestDetails.ID))
+	log.Info("---------------------------------------------------")
 	return err
 }
 
-func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.FrogbotRepoConfig, client vcsclient.VcsClient) ([]formats.VulnerabilityOrViolationRow, error) {
+func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.FrogbotRepoConfig, prDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) ([]formats.VulnerabilityOrViolationRow, error) {
 	var vulnerabilitiesRows []formats.VulnerabilityOrViolationRow
+	targetBranch := strings.Split(prDetails.Target.Name, ":")[1]
+	sourceBranch := strings.Split(prDetails.Source.Name, ":")[1]
 	for i := range repoConfig.Projects {
+		// Scan source
+		if err := cmd.gitManager.CheckoutRemoteBranch(sourceBranch); err != nil {
+			return nil, err
+		}
 		scanDetails := utils.NewScanDetails(client, &repoConfig.Server, &repoConfig.Git).
 			SetProject(&repoConfig.Projects[i]).
 			SetReleasesRepo(repoConfig.JfrogReleasesRepo).
 			SetXrayGraphScanParams(repoConfig.Watches, repoConfig.JFrogProjectKey).
 			SetMinSeverity(repoConfig.MinSeverity).
-			SetFixableOnly(repoConfig.FixableOnly)
-		sourceScan, isMultipleRoot, err := auditSource(scanDetails)
+			SetFixableOnly(repoConfig.FixableOnly).
+			SetBranch(sourceBranch)
+		sourceScan, isMultipleRoot, err := cmd.checkPathsAndAudit(scanDetails)
 		if err != nil {
 			return nil, err
 		}
+
 		if repoConfig.IncludeAllVulnerabilities {
 			log.Info("Frogbot is configured to show all vulnerabilities")
 			allIssuesRows, err := createAllIssuesRows(sourceScan, isMultipleRoot)
@@ -115,13 +137,16 @@ func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.FrogbotRepoCon
 			continue
 		}
 		// Audit target code if not provided with scan results
-		targetBranchToScan := repoConfig.Branches[0]
-		scanDetails.SetFailOnInstallationErrors(*repoConfig.FailOnSecurityIssues).SetBranch(targetBranchToScan)
-		if cmd.shouldScanProject(targetBranchToScan, i) {
-			if cmd.scanResults, cmd.isMultipleRoot, err = auditTarget(scanDetails); err != nil {
+		scanDetails.SetFailOnInstallationErrors(*repoConfig.FailOnSecurityIssues)
+
+		if cmd.shouldScanProject(targetBranch, i) {
+			if err = cmd.gitManager.Checkout(targetBranch); err != nil {
 				return nil, err
 			}
-			cmd.setScannedProject(targetBranchToScan, i)
+			if cmd.scanResults, cmd.isMultipleRoot, err = cmd.checkPathsAndAudit(scanDetails); err != nil {
+				return nil, err
+			}
+			cmd.setScannedProject(targetBranch, i)
 		}
 		newIssuesRows, err := createNewIssuesRows(cmd.scanResults, sourceScan, cmd.isMultipleRoot)
 		if err != nil {
@@ -217,12 +242,8 @@ func createAllIssuesRows(currentScan []services.ScanResponse, isMultipleRoot boo
 	return getScanVulnerabilitiesRows(violations, vulnerabilities, isMultipleRoot)
 }
 
-func auditSource(scanSetup *utils.ScanDetails) ([]services.ScanResponse, bool, error) {
-	wd, err := os.Getwd()
-	if err != nil {
-		return []services.ScanResponse{}, false, err
-	}
-	fullPathWds := getFullPathWorkingDirs(scanSetup.WorkingDirs, wd)
+func (cmd *ScanPullRequestCmd) checkPathsAndAudit(scanSetup *utils.ScanDetails) ([]services.ScanResponse, bool, error) {
+	fullPathWds := getFullPathWorkingDirs(scanSetup.WorkingDirs, cmd.wd)
 	return runInstallAndAudit(scanSetup, fullPathWds...)
 }
 

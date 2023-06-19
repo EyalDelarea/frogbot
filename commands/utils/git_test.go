@@ -189,7 +189,7 @@ func TestGitManager_GenerateAggregatedCommitMessage(t *testing.T) {
 	}
 }
 
-func TestConvertSSHtoHTTPS(t *testing.T) {
+func TestGenerateHTTPSCloneUrl(t *testing.T) {
 	testsCases := []struct {
 		repoName    string
 		repoOwner   string
