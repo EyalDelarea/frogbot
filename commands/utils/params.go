@@ -98,6 +98,7 @@ func (p *Project) setDefaultsIfNeeded() error {
 	if p.Repository == "" {
 		p.Repository = getTrimmedEnv(DepsRepoEnv)
 	}
+
 	return nil
 }
 

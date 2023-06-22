@@ -126,14 +126,11 @@ func (cfp *CreateFixPullRequestsCmd) fixVulnerablePackages(fixVersionsMap map[st
 		return
 	}
 	defer func() {
-		e1 := restoreBaseDir()
-		e2 := fileutils.RemoveTempDir(clonedRepoDir)
-		if err == nil {
-			err = e1
-			if err == nil {
-				err = e2
-			}
+		if cfp.dryRun {
+			// On dry runs temp folders are nested inside the main temp folder
+			return
 		}
+		err = errors.Join(err, restoreBaseDir(), fileutils.RemoveTempDir(clonedRepoDir))
 	}()
 	if cfp.aggregateFixes {
 		err = cfp.fixIssuesSinglePR(fixVersionsMap)
@@ -302,8 +299,13 @@ func (cfp *CreateFixPullRequestsCmd) openAggregatedPullRequest(fixBranchName str
 }
 
 func (cfp *CreateFixPullRequestsCmd) cloneRepository() (tempWd string, restoreDir func() error, err error) {
-	// Create temp working directory
-	tempWd, err = fileutils.CreateTempDir()
+	if cfp.dryRunRepoPath != "" {
+		// On dry run, create the temp folder nested in the current folder
+		tempWd, err = os.MkdirTemp(cfp.dryRunRepoPath, "nested-temp.")
+	} else {
+		// Create temp working directory
+		tempWd, err = fileutils.CreateTempDir()
+	}
 	if err != nil {
 		return
 	}

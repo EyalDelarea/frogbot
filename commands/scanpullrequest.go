@@ -118,7 +118,7 @@ func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.Repository, pr
 	for i := range repoConfig.Projects {
 		// Scan source
 		if err := cmd.gitManager.CheckoutRemoteBranch(sourceBranch); err != nil {
-			return nil, err
+			return nil, fmt.Errorf("checkout to pull reuqest source branch failed with the following error: %s", err.Error())
 		}
 		scanDetails := utils.NewScanDetails(client, &repoConfig.Server, &repoConfig.Git).
 			SetProject(&repoConfig.Projects[i]).

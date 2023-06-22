@@ -5,7 +5,6 @@ import (
 	"github.com/jfrog/frogbot/commands/utils"
 	"github.com/jfrog/froggit-go/vcsclient"
 	"github.com/jfrog/jfrog-client-go/utils/log"
-	"path/filepath"
 )
 
 type ScanAndFixRepositories struct {
@@ -63,6 +62,7 @@ func (saf *ScanAndFixRepositories) downloadAndRunScanAndFix(repository *utils.Re
 		}
 	}()
 
-	cfp := CreateFixPullRequestsCmd{dryRun: saf.dryRun, dryRunRepoPath: filepath.Join(saf.dryRunRepoPath, repository.RepoName)}
-	return cfp.scanAndFixRepository(repository, branch, client)
+	cfp := CreateFixPullRequestsCmd{dryRun: saf.dryRun, dryRunRepoPath: saf.dryRunRepoPath}
+	err = cfp.scanAndFixRepository(repository, branch, client)
+	return err
 }

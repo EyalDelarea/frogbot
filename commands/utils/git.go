@@ -11,6 +11,7 @@ import (
 	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
 	"net/http"
 	"os"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -214,6 +215,9 @@ func (gm *GitManager) commit(commitMessage string) error {
 }
 
 func (gm *GitManager) BranchExistsInRemote(branchName string) (bool, error) {
+	if gm.dryRun {
+		return false, nil
+	}
 	remote, err := gm.repository.Remote(gm.remoteName)
 	if err != nil {
 		return false, errorutils.CheckError(err)
@@ -341,7 +345,9 @@ func (gm *GitManager) dryRunClone(destination string) error {
 		return err
 	}
 	// Copy all the current directory content to the destination path
-	err = fileutils.CopyDir(baseWd, destination, true, nil)
+	// In order to avoid an endless loop when copying into the current directory, exclude the target folder.
+	exclude := []string{filepath.Base(destination)}
+	err = fileutils.CopyDir(baseWd, destination, true, exclude)
 	if err != nil {
 		return err
 	}

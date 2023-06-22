@@ -33,6 +33,7 @@ const (
 	testCleanProjConfigPath          = "testdata/config/frogbot-config-clean-test-proj.yml"
 	testProjConfigPath               = "testdata/config/frogbot-config-test-proj.yml"
 	testProjConfigPathNoFail         = "testdata/config/frogbot-config-test-proj-no-fail.yml"
+	testSameBranchProjConfigPath     = "testdata/config/frogbot-config-test-same-branch-fail.yml"
 )
 
 func TestCreateVulnerabilitiesRows(t *testing.T) {
@@ -395,6 +396,10 @@ func TestRunInstallIfNeeded(t *testing.T) {
 	scanSetup.SetFailOnInstallationErrors(true)
 	assert.NoError(t, runInstallIfNeeded(&scanSetup, ""))
 	tmpDir, err := fileutils.CreateTempDir()
+	defer func() {
+		err = fileutils.RemoveTempDir(tmpDir)
+		assert.NoError(t, err)
+	}()
 	assert.NoError(t, err)
 	params := &utils.Project{
 		InstallCommandName: "echo",
@@ -419,6 +424,32 @@ func TestRunInstallIfNeeded(t *testing.T) {
 
 func TestScanPullRequest(t *testing.T) {
 	testScanPullRequest(t, testProjConfigPath, "test-proj", true)
+}
+
+func TestScanPullRequestSameBranchFail(t *testing.T) {
+	params, restoreEnv := verifyEnv(t)
+	defer restoreEnv()
+
+	// Create mock GitLab server
+	projectName := "test-same-branch-fail"
+
+	server := httptest.NewServer(createGitLabHandler(t, projectName))
+	defer server.Close()
+
+	configAggregator, client := prepareConfigAndClient(t, testSameBranchProjConfigPath, server, params)
+	_, cleanUp := utils.PrepareTestEnvironment(t, projectName, "scanpullrequest")
+	defer cleanUp()
+
+	// Run "frogbot scan pull request"
+	var scanPullRequest ScanPullRequestCmd
+	err := scanPullRequest.Run(configAggregator, client)
+	exceptedError := fmt.Errorf(utils.ErrScanPullRequestSameBranches, "main")
+	assert.Equal(t, exceptedError, err)
+
+	// Check env sanitize
+	err = utils.SanitizeEnv()
+	assert.NoError(t, err)
+	utils.AssertSanitizedEnv(t)
 }
 
 func TestScanPullRequestNoFail(t *testing.T) {
@@ -635,10 +666,11 @@ func verifyEnv(t *testing.T) (server coreconfig.ServerDetails, restoreFunc func(
 	server.AccessToken = token
 	restoreFunc = func() {
 		utils.SetEnvAndAssert(t, map[string]string{
-			utils.JFrogUrlEnv:      url,
-			utils.JFrogTokenEnv:    token,
-			utils.JFrogUserEnv:     username,
-			utils.JFrogPasswordEnv: password,
+			utils.JFrogUrlEnv:          url,
+			utils.JFrogTokenEnv:        token,
+			utils.JFrogUserEnv:         username,
+			utils.JFrogPasswordEnv:     password,
+			utils.GitAggregateFixesEnv: "FALSE",
 		})
 	}
 	return

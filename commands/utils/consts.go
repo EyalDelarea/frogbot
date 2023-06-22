@@ -8,7 +8,8 @@ const (
 	baseResourceUrl = "https://raw.githubusercontent.com/jfrog/frogbot/master/resources/"
 
 	// Errors
-	errUnsupportedMultiRepo = "multi repository configuration isn't supported. only one repository configuration is allowed"
+	errUnsupportedMultiRepo        = "multi repository configuration isn't supported. only one repository configuration is allowed"
+	ErrScanPullRequestSameBranches = "can pull request triggered on the same branch: %s, Please check your configuration"
 
 	// Images
 	NoVulnerabilityBannerSource ImageSource = "noVulnerabilityBanner.png"
@@ -80,15 +81,6 @@ const (
 
 	// The 'GITHUB_ACTIONS' environment variable exists when the CI is GitHub Actions
 	GitHubActionsEnv = "GITHUB_ACTIONS"
-
-	// When Frogbot periodically scans repositories, it skips scanning repositories for which the latest commit has already been scanned,
-	// unless the latest commit was scanned more than 'SkipRepoScanDays' days ago.
-	SkipRepoScanDays = 4
-
-	// Used by Frogbot to create new commits statuses and recognize its own statuses.
-	CommitStatusDescription = "Scanned by Frogbot"
-	CommitStatusDetailsUrl  = "https://github.com/jfrog/frogbot#readme"
-	FrogbotCreatorName      = "Frogbot"
 
 	// Placeholders for templates
 	PackagePlaceHolder    = "${IMPACTED_PACKAGE}"
