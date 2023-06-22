@@ -380,9 +380,18 @@ func (gm *GitManager) generateHTTPSCloneUrl() (url string, err error) {
 }
 
 func (gm *GitManager) CheckoutRemoteBranch(branchName string) error {
-	checkoutConfig := &git.CheckoutOptions{
-		Branch: plumbing.NewRemoteReferenceName(gm.remoteName, branchName),
-		Force:  true,
+	var checkoutConfig *git.CheckoutOptions
+	if gm.dryRun {
+		// On dry runs we mimic remote locally
+		checkoutConfig = &git.CheckoutOptions{
+			Branch: plumbing.NewBranchReferenceName(branchName),
+			Force:  true,
+		}
+	} else {
+		checkoutConfig = &git.CheckoutOptions{
+			Branch: plumbing.NewRemoteReferenceName(gm.remoteName, branchName),
+			Force:  true,
+		}
 	}
 	worktree, err := gm.repository.Worktree()
 	if err != nil {

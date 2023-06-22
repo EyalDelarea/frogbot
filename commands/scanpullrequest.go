@@ -43,7 +43,8 @@ func (spi *ScannedProjectInfo) setScannedProject(branchName string, projectIndex
 type ScanPullRequestCmd struct {
 	ScannedProjectInfo
 	gitManager *utils.GitManager
-	wd         string
+	wd         string // TODO remove this ?
+	dryRun     bool
 }
 
 // Run ScanPullRequest method only works for a single repository scan.
@@ -61,7 +62,7 @@ func (cmd *ScanPullRequestCmd) Run(configAggregator utils.RepoAggregator, client
 	}
 	// Init git manager in the current working dir
 	// Using the first configAggregator as we are running on a single pull request
-	gitManager, err := utils.NewGitManager(false, "", "", "origin", &configAggregator[0].Git)
+	gitManager, err := utils.NewGitManager(cmd.dryRun, "", "", "origin", &configAggregator[0].Git)
 	if err != nil {
 		return err
 	}
@@ -79,6 +80,7 @@ func (cmd *ScanPullRequestCmd) Run(configAggregator utils.RepoAggregator, client
 // b. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
 // Otherwise, only the source branch is scanned and all found vulnerabilities are being displayed.
 func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.Repository, pullRequestDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) error {
+	// TODO this should be a prequriets or not ?
 	wd, err := os.Getwd()
 	if err != nil {
 		return err

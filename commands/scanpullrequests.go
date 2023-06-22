@@ -25,6 +25,7 @@ func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.RepoAggregator, cli
 	cmd.scanResults = make(map[string]*ScannedProjectInfo)
 	cmd.scanPrCmd = &ScanPullRequestCmd{}
 	for _, config := range configAggregator {
+		// TODO clone the repo and wd to it before
 		err := cmd.scanAllPullRequests(config, client)
 		if err != nil {
 			return err
@@ -40,6 +41,8 @@ func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.RepoAggregator, cli
 // d. Audit the dependencies of the source and the target branches.
 // e. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
 func (cmd ScanAllPullRequestsCmd) scanAllPullRequests(repo utils.Repository, client vcsclient.VcsClient) (err error) {
+	// TODO this should move to one step before.
+	// TODO This function should accpect when it's wd is inside the clones repo.
 	wd, err := fileutils.CreateTempDir()
 	if err != nil {
 		return

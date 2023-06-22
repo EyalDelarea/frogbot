@@ -1,6 +1,7 @@
 package commands
 
 import (
+	"fmt"
 	"github.com/jfrog/froggit-go/vcsclient"
 	"github.com/jfrog/froggit-go/vcsutils"
 	"github.com/jfrog/jfrog-client-go/utils/io/fileutils"
@@ -289,6 +290,7 @@ func verifyTechnologyNaming(t *testing.T, scanResponse []services.ScanResponse, 
 // Running git diff and making sure expected changes to the dependency file
 func verifyDependencyFileDiff(baseBranch string, fixBranch string, dependencyFilename string) ([]byte, error) {
 	var cmd *exec.Cmd
+	log.Debug(fmt.Printf("checking the git diff between %s and %s branches ", baseBranch, fixBranch))
 	// Suppress condition always false warning
 	//goland:noinspection ALL
 	if runtime.GOOS == "windows" {

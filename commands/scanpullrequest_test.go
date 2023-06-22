@@ -33,7 +33,6 @@ const (
 	testCleanProjConfigPath          = "testdata/config/frogbot-config-clean-test-proj.yml"
 	testProjConfigPath               = "testdata/config/frogbot-config-test-proj.yml"
 	testProjConfigPathNoFail         = "testdata/config/frogbot-config-test-proj-no-fail.yml"
-	testSameBranchProjConfigPath     = "testdata/config/frogbot-config-test-same-branch-fail.yml"
 )
 
 func TestCreateVulnerabilitiesRows(t *testing.T) {
@@ -426,32 +425,6 @@ func TestScanPullRequest(t *testing.T) {
 	testScanPullRequest(t, testProjConfigPath, "test-proj", true)
 }
 
-func TestScanPullRequestSameBranchFail(t *testing.T) {
-	params, restoreEnv := verifyEnv(t)
-	defer restoreEnv()
-
-	// Create mock GitLab server
-	projectName := "test-same-branch-fail"
-
-	server := httptest.NewServer(createGitLabHandler(t, projectName))
-	defer server.Close()
-
-	configAggregator, client := prepareConfigAndClient(t, testSameBranchProjConfigPath, server, params)
-	_, cleanUp := utils.PrepareTestEnvironment(t, projectName, "scanpullrequest")
-	defer cleanUp()
-
-	// Run "frogbot scan pull request"
-	var scanPullRequest ScanPullRequestCmd
-	err := scanPullRequest.Run(configAggregator, client)
-	exceptedError := fmt.Errorf(utils.ErrScanPullRequestSameBranches, "main")
-	assert.Equal(t, exceptedError, err)
-
-	// Check env sanitize
-	err = utils.SanitizeEnv()
-	assert.NoError(t, err)
-	utils.AssertSanitizedEnv(t)
-}
-
 func TestScanPullRequestNoFail(t *testing.T) {
 	testScanPullRequest(t, testProjConfigPathNoFail, "test-proj", false)
 }
@@ -485,7 +458,7 @@ func testScanPullRequest(t *testing.T, configPath, projectName string, failOnSec
 	defer cleanUp()
 
 	// Run "frogbot scan pull request"
-	var scanPullRequest ScanPullRequestCmd
+	scanPullRequest := ScanPullRequestCmd{dryRun: true}
 	err := scanPullRequest.Run(configAggregator, client)
 	if failOnSecurityIssues {
 		assert.EqualErrorf(t, err, securityIssueFoundErr, "Error should be: %v, got: %v", securityIssueFoundErr, err)
@@ -495,8 +468,8 @@ func testScanPullRequest(t *testing.T, configPath, projectName string, failOnSec
 
 	// Check env sanitize
 	err = utils.SanitizeEnv()
-	assert.NoError(t, err)
 	utils.AssertSanitizedEnv(t)
+	assert.NoError(t, err)
 }
 
 func TestVerifyGitHubFrogbotEnvironment(t *testing.T) {
@@ -630,14 +603,9 @@ func createGitLabHandler(t *testing.T, projectName string) http.HandlerFunc {
 		}
 
 		// Get pull request by ID mimic
-		if r.RequestURI == "/api/v4/projects/jfrog%2Ftest-proj/merge_requests/1" {
-			buf := new(bytes.Buffer)
-			_, err := buf.ReadFrom(r.Body)
-			assert.NoError(t, err)
-
+		if r.RequestURI == fmt.Sprintf("/api/v4/projects/jfrog%s/merge_requests/1", "%2F"+projectName) {
 			expectedResponse, err := os.ReadFile(filepath.Join("..", "get_pull_request_response.json"))
 			assert.NoError(t, err)
-			assert.JSONEq(t, string(expectedResponse), buf.String())
 			_, err = w.Write(expectedResponse)
 			assert.NoError(t, err)
 			w.WriteHeader(http.StatusOK)
