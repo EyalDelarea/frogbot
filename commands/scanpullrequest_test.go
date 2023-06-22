@@ -597,6 +597,20 @@ func createGitLabHandler(t *testing.T, projectName string) http.HandlerFunc {
 			_, err = w.Write([]byte("{}"))
 			assert.NoError(t, err)
 		}
+
+		// Get pull request by ID mimic
+		if r.RequestURI == "/api/v4/projects/jfrog%2Ftest-proj/merge_requests/1" {
+			buf := new(bytes.Buffer)
+			_, err := buf.ReadFrom(r.Body)
+			assert.NoError(t, err)
+
+			expectedResponse, err := os.ReadFile(filepath.Join("..", "get_pull_request_response.json"))
+			assert.NoError(t, err)
+			assert.JSONEq(t, string(expectedResponse), buf.String())
+			_, err = w.Write(expectedResponse)
+			assert.NoError(t, err)
+			w.WriteHeader(http.StatusOK)
+		}
 	}
 }
 

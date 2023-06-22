@@ -4,11 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
-	"os/exec"
-	"path/filepath"
-	"strings"
-
 	"github.com/jfrog/frogbot/commands/utils"
 	"github.com/jfrog/froggit-go/vcsclient"
 	"github.com/jfrog/froggit-go/vcsutils"
@@ -17,6 +12,9 @@ import (
 	xrayutils "github.com/jfrog/jfrog-cli-core/v2/xray/utils"
 	"github.com/jfrog/jfrog-client-go/utils/log"
 	"github.com/jfrog/jfrog-client-go/xray/services"
+	"os"
+	"os/exec"
+	"path/filepath"
 )
 
 const (
@@ -61,7 +59,15 @@ func (cmd *ScanPullRequestCmd) Run(configAggregator utils.RepoAggregator, client
 			return err
 		}
 	}
-	pullRequestDetails, err := client.GetPullRequestInfoById(context.Background(), repoConfig.RepoOwner, repoConfig.RepoName, repoConfig.PullRequestID)
+	// Init git manager in the current working dir
+	// Using the first configAggregator as we are running on a single pull request
+	gitManager, err := utils.NewGitManager(false, "", "", "origin", &configAggregator[0].Git)
+	if err != nil {
+		return err
+	}
+	cmd.gitManager = gitManager
+
+	pullRequestDetails, err := client.GetPullRequest(context.Background(), repoConfig.RepoOwner, repoConfig.RepoName, repoConfig.PullRequestID)
 	if err != nil {
 		return err
 	}
@@ -107,8 +113,8 @@ func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.Repository, pul
 
 func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.Repository, prDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) ([]formats.VulnerabilityOrViolationRow, error) {
 	var vulnerabilitiesRows []formats.VulnerabilityOrViolationRow
-	targetBranch := strings.Split(prDetails.Target.Name, ":")[1]
-	sourceBranch := strings.Split(prDetails.Source.Name, ":")[1]
+	targetBranch := prDetails.Target.Name
+	sourceBranch := prDetails.Source.Name
 	for i := range repoConfig.Projects {
 		// Scan source
 		if err := cmd.gitManager.CheckoutRemoteBranch(sourceBranch); err != nil {
