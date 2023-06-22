@@ -21,7 +21,7 @@ type ScanAllPullRequestsCmd struct {
 	scanPrCmd   *ScanPullRequestCmd
 }
 
-func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.FrogbotConfigAggregator, client vcsclient.VcsClient) error {
+func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.RepoAggregator, client vcsclient.VcsClient) error {
 	cmd.scanResults = make(map[string]*ScannedProjectInfo)
 	cmd.scanPrCmd = &ScanPullRequestCmd{}
 	for _, config := range configAggregator {
@@ -39,7 +39,7 @@ func (cmd ScanAllPullRequestsCmd) Run(configAggregator utils.FrogbotConfigAggreg
 // c. Find the ones that should be scanned (new PRs or PRs with a 're-scan' comment)
 // d. Audit the dependencies of the source and the target branches.
 // e. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
-func (cmd ScanAllPullRequestsCmd) scanAllPullRequests(repo utils.FrogbotRepoConfig, client vcsclient.VcsClient) (err error) {
+func (cmd ScanAllPullRequestsCmd) scanAllPullRequests(repo utils.Repository, client vcsclient.VcsClient) (err error) {
 	wd, err := fileutils.CreateTempDir()
 	if err != nil {
 		return
@@ -81,7 +81,7 @@ func (cmd ScanAllPullRequestsCmd) scanAllPullRequests(repo utils.FrogbotRepoConf
 	return
 }
 
-func shouldScanPullRequest(repo utils.FrogbotRepoConfig, client vcsclient.VcsClient, prID int) (shouldScan bool, err error) {
+func shouldScanPullRequest(repo utils.Repository, client vcsclient.VcsClient, prID int) (shouldScan bool, err error) {
 	pullRequestsComments, err := client.ListPullRequestComments(context.Background(), repo.RepoOwner, repo.RepoName, prID)
 	if err != nil {
 		return
@@ -109,17 +109,19 @@ func isFrogbotRescanComment(comment string) bool {
 	return strings.Contains(strings.ToLower(strings.TrimSpace(comment)), utils.RescanRequestComment)
 }
 
-func (cmd ScanAllPullRequestsCmd) downloadAndScanPullRequest(pr vcsclient.PullRequestInfo, repo utils.FrogbotRepoConfig, client vcsclient.VcsClient) error {
+// TODO remove or use it
+func (cmd ScanAllPullRequestsCmd) downloadAndScanPullRequest(pr vcsclient.PullRequestInfo, repo utils.Repository, client vcsclient.VcsClient) error {
 	// Download the pull request source ("from") branch
-	params := utils.Params{Git: utils.Git{
-		GitProvider: repo.GitProvider,
-		Token:       repo.Token,
-		ApiEndpoint: repo.ApiEndpoint,
-		RepoOwner:   repo.RepoOwner,
-		RepoName:    pr.Source.Repository,
-		Branches:    []string{pr.Source.Name}},
-	}
-	frogbotParams := &utils.FrogbotRepoConfig{
+	params := utils.Params{
+		Git: utils.Git{
+			ClientInfo: utils.ClientInfo{
+				GitProvider: repo.GitProvider,
+				VcsInfo:     vcsclient.VcsInfo{APIEndpoint: repo.APIEndpoint, Token: repo.Token},
+				RepoOwner:   repo.RepoOwner,
+				RepoName:    pr.Source.Repository,
+				Branches:    []string{pr.Source.Name}},
+		}}
+	frogbotParams := &utils.Repository{
 		Server: repo.Server,
 		Params: params,
 	}
@@ -129,20 +131,14 @@ func (cmd ScanAllPullRequestsCmd) downloadAndScanPullRequest(pr vcsclient.PullRe
 	}
 	// Cleanup
 	defer func() {
-		e := cleanup()
-		if err == nil {
-			err = e
-		}
+		err = errors.Join(err, cleanup())
 	}()
 	restoreDir, err := utils.Chdir(wd)
 	if err != nil {
 		return err
 	}
 	defer func() {
-		e := restoreDir()
-		if err == nil {
-			err = e
-		}
+		err = errors.Join(err, restoreDir())
 	}()
 	// The target branch (to) will be downloaded as part of the Frogbot scanPullRequest execution
 	params = utils.Params{
@@ -152,12 +148,13 @@ func (cmd ScanAllPullRequestsCmd) downloadAndScanPullRequest(pr vcsclient.PullRe
 			Projects:                  repo.Projects,
 		},
 		Git: utils.Git{
-			GitProvider:   repo.GitProvider,
-			Token:         repo.Token,
-			ApiEndpoint:   repo.ApiEndpoint,
-			RepoOwner:     repo.RepoOwner,
-			Branches:      []string{pr.Target.Name},
-			RepoName:      pr.Target.Repository,
+			ClientInfo: utils.ClientInfo{
+				GitProvider: repo.GitProvider,
+				VcsInfo:     vcsclient.VcsInfo{APIEndpoint: repo.APIEndpoint, Token: repo.Token},
+				RepoOwner:   repo.RepoOwner,
+				Branches:    []string{pr.Target.Name},
+				RepoName:    pr.Target.Repository,
+			},
 			PullRequestID: int(pr.ID),
 		},
 		JFrogPlatform: utils.JFrogPlatform{
@@ -166,7 +163,7 @@ func (cmd ScanAllPullRequestsCmd) downloadAndScanPullRequest(pr vcsclient.PullRe
 		},
 	}
 
-	frogbotParams = &utils.FrogbotRepoConfig{
+	frogbotParams = &utils.Repository{
 		OutputWriter: utils.GetCompatibleOutputWriter(repo.GitProvider),
 		Server:       repo.Server,
 		Params:       params,

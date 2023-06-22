@@ -48,9 +48,9 @@ type ScanPullRequestCmd struct {
 	wd         string
 }
 
-// Run ScanPullRequestAndComment method only works for single repository scan.
+// Run ScanPullRequest method only works for a single repository scan.
 // Therefore, the first repository config represents the repository on which Frogbot runs, and it is the only one that matters.
-func (cmd *ScanPullRequestCmd) Run(configAggregator utils.FrogbotConfigAggregator, client vcsclient.VcsClient) error {
+func (cmd *ScanPullRequestCmd) Run(configAggregator utils.RepoAggregator, client vcsclient.VcsClient) error {
 	cmd.projectIndex = -1
 	if err := utils.ValidateSingleRepoConfiguration(&configAggregator); err != nil {
 		return err
@@ -72,8 +72,7 @@ func (cmd *ScanPullRequestCmd) Run(configAggregator utils.FrogbotConfigAggregato
 // a. Audit the dependencies of the source and the target branches.
 // b. Compare the vulnerabilities found in source and target branches, and show only the new vulnerabilities added by the pull request.
 // Otherwise, only the source branch is scanned and all found vulnerabilities are being displayed.
-func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConfig, pullRequestDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) error {
-
+func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.Repository, pullRequestDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) error {
 	wd, err := os.Getwd()
 	if err != nil {
 		return err
@@ -89,7 +88,7 @@ func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConf
 		return err
 	}
 
-	// Create pull request message
+	// Create a pull request message
 	message := createPullRequestMessage(vulnerabilitiesRows, repoConfig.OutputWriter)
 
 	// Add comment to the pull request
@@ -97,7 +96,7 @@ func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConf
 		return errors.New("couldn't add pull request comment: " + err.Error())
 	}
 
-	// Fail the Frogbot task, if a security issue is found and Frogbot isn't configured to avoid the failure.
+	// Fail the Frogbot task if a security issue is found and Frogbot isn't configured to avoid the failure.
 	if repoConfig.FailOnSecurityIssues != nil && *repoConfig.FailOnSecurityIssues && len(vulnerabilitiesRows) > 0 {
 		err = errors.New(securityIssueFoundErr)
 	}
@@ -106,7 +105,7 @@ func (cmd *ScanPullRequestCmd) scanPullRequest(repoConfig *utils.FrogbotRepoConf
 	return err
 }
 
-func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.FrogbotRepoConfig, prDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) ([]formats.VulnerabilityOrViolationRow, error) {
+func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.Repository, prDetails *vcsclient.PullRequestInfo, client vcsclient.VcsClient) ([]formats.VulnerabilityOrViolationRow, error) {
 	var vulnerabilitiesRows []formats.VulnerabilityOrViolationRow
 	targetBranch := strings.Split(prDetails.Target.Name, ":")[1]
 	sourceBranch := strings.Split(prDetails.Source.Name, ":")[1]
@@ -159,8 +158,8 @@ func (cmd *ScanPullRequestCmd) auditPullRequest(repoConfig *utils.FrogbotRepoCon
 }
 
 // Verify that the 'frogbot' GitHub environment was properly configured on the repository
-func verifyGitHubFrogbotEnvironment(client vcsclient.VcsClient, repoConfig *utils.FrogbotRepoConfig) error {
-	if repoConfig.ApiEndpoint != "" && repoConfig.ApiEndpoint != "https://api.github.com" {
+func verifyGitHubFrogbotEnvironment(client vcsclient.VcsClient, repoConfig *utils.Repository) error {
+	if repoConfig.APIEndpoint != "" && repoConfig.APIEndpoint != "https://api.github.com" {
 		// Don't verify 'frogbot' environment on GitHub on-prem
 		return nil
 	}
@@ -169,7 +168,7 @@ func verifyGitHubFrogbotEnvironment(client vcsclient.VcsClient, repoConfig *util
 		return nil
 	}
 
-	// If repository is not public, using 'frogbot' environment is not mandatory
+	// If the repository is not public, using 'frogbot' environment is not mandatory
 	repoInfo, err := client.GetRepositoryInfo(context.Background(), repoConfig.RepoOwner, repoConfig.RepoName)
 	if err != nil {
 		return err
@@ -190,7 +189,7 @@ func verifyGitHubFrogbotEnvironment(client vcsclient.VcsClient, repoConfig *util
 	return nil
 }
 
-// Create vulnerabilities rows. The rows should contain only the new issues added by this PR
+// Create vulnerability rows. The rows should contain only the new issues added by this PR
 func createNewIssuesRows(targetScan, sourceScan []services.ScanResponse, isMultipleRoot bool) (vulnerabilitiesRows []formats.VulnerabilityOrViolationRow, err error) {
 	targetScanAggregatedResults := aggregateScanResults(targetScan)
 	sourceScanAggregatedResults := aggregateScanResults(sourceScan)
@@ -224,7 +223,7 @@ func aggregateScanResults(scanResults []services.ScanResponse) services.ScanResp
 	return aggregateResults
 }
 
-// Create vulnerabilities rows. The rows should contain all the issues that were found in this module scan.
+// Create vulnerability rows. The rows should contain all the issues that were found in this module scan.
 func getScanVulnerabilitiesRows(violations []services.Violation, vulnerabilities []services.Vulnerability, isMultipleRoot bool) ([]formats.VulnerabilityOrViolationRow, error) {
 	if len(violations) > 0 {
 		violationsRows, _, _, err := xrayutils.PrepareViolations(violations, &xrayutils.ExtendedScanResults{}, isMultipleRoot, true)
@@ -236,7 +235,7 @@ func getScanVulnerabilitiesRows(violations []services.Violation, vulnerabilities
 	return []formats.VulnerabilityOrViolationRow{}, nil
 }
 
-// Create vulnerabilities rows. The rows should contain all the issues that were found in this PR
+// Create vulnerability rows. The rows should contain all the issues that were found in this PR
 func createAllIssuesRows(currentScan []services.ScanResponse, isMultipleRoot bool) ([]formats.VulnerabilityOrViolationRow, error) {
 	violations, vulnerabilities, _ := xrayutils.SplitScanResults(currentScan)
 	return getScanVulnerabilitiesRows(violations, vulnerabilities, isMultipleRoot)
@@ -263,6 +262,7 @@ func getFullPathWorkingDirs(workingDirs []string, baseWd string) []string {
 	return fullPathWds
 }
 
+// TODO remove or use it
 func auditTarget(scanSetup *utils.ScanDetails) (res []services.ScanResponse, isMultipleRoot bool, err error) {
 	// First download the target repo to temp dir
 	log.Info("Auditing the", scanSetup.Git.RepoName, "repository on the", scanSetup.Branch(), "branch")
@@ -330,7 +330,7 @@ func runInstallIfNeeded(scanSetup *utils.ScanDetails, workDir string) (err error
 
 func runInstallCommand(scanSetup *utils.ScanDetails) ([]byte, error) {
 	if scanSetup.Repository == "" {
-		//#nosec G204 -- False positive - the subprocess only run after the user's approval.
+		//#nosec G204 -- False positive - the subprocess only runs after the user's approval.
 		return exec.Command(scanSetup.InstallCommandName, scanSetup.InstallCommandArgs...).CombinedOutput()
 	}
 
